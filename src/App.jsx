@@ -5,8 +5,53 @@ import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, ArcElement, Title, Tooltip, Legend } from 'chart.js';
 import { Bar, Doughnut } from 'react-chartjs-2';
+import axios from 'axios';
 
 import { User, Lock, CheckCircle, XCircle, Search, Plus, Edit, Trash2, Eye, EyeOff, Download } from 'lucide-react';
+
+// Real-time price fetching service
+const ALPHA_VANTAGE_API_KEY = 'SRGCVDR6Y3ODT6J4'; // Replace with your actual key
+
+const fetchRealTimePrice = async (symbol) => {
+  try {
+    // Alpha Vantage Global Quote endpoint
+    const response = await axios.get(
+      `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${ALPHA_VANTAGE_API_KEY}`
+    );
+    
+    const data = response.data['Global Quote'];
+    
+    if (data && data['05. price']) {
+      return {
+        success: true,
+        price: parseFloat(data['05. price']),
+        change: parseFloat(data['09. change']),
+        changePercent: data['10. change percent'],
+        lastUpdated: data['07. latest trading day']
+      };
+    } else {
+      return { success: false, message: 'Price not found' };
+    }
+  } catch (error) {
+    console.error('Error fetching price:', error);
+    return { success: false, message: 'API error' };
+  }
+};
+
+// Function to convert ISIN to stock symbol
+const isinToSymbol = (isin) => {
+  // ISIN format: US0378331005 → AAPL
+  // This is a simple mapper - you'd expand this based on your needs
+  const isinMap = {
+    'US0378331005': 'AAPL',  // Apple
+    'US5949181045': 'MSFT',  // Microsoft
+    'US88160R1014': 'TSLA',  // Tesla
+    'US02079K3059': 'GOOGL', // Google
+    'US0231351067': 'AMZN',  // Amazon
+  };
+  
+  return isinMap[isin] || null;
+};
 
 
 // ============================================================================
@@ -1139,6 +1184,11 @@ const PortfolioList = ({ user, portfolios, onRefresh, onEdit, onDelete }) => {
   const canApprove = user.role === 'checker' || user.role === 'admin';
   const canEdit = user.role === 'maker' || user.role === 'admin';
   const canDelete = user.role === 'admin';
+
+   const handlePriceUpdate = async (itemId, newPrice) => {
+    await mockAPI.updatePortfolio(itemId, { price: newPrice });
+    onRefresh();
+  };
   
   const handleApprove = async (id) => {
     await mockAPI.updatePortfolio(id, { status: 'approved' });
@@ -1171,6 +1221,16 @@ const PortfolioList = ({ user, portfolios, onRefresh, onEdit, onDelete }) => {
               <td className="px-4 py-3 text-sm">{item.quantity}</td>
               <td className="px-4 py-3 text-sm">${item.price}</td>
               <td className="px-4 py-3 text-sm">
+
+                <div className="flex flex-col gap-1">
+                  <span>${item.price}</span>
+                  {/* ADD THIS - Live Price Button */}
+                  <LivePriceDisplay 
+                    isin={item.isin} 
+                    name={item.name}
+                    onPriceUpdate={(newPrice) => handlePriceUpdate(item.id, newPrice)}
+                  />
+                </div>
                 <span className={`px-2 py-1 rounded text-xs ${
                   item.status === 'approved' ? 'bg-green-100 text-green-800' :
                   item.status === 'rejected' ? 'bg-red-100 text-red-800' :
@@ -1255,6 +1315,61 @@ const TestPanel = () => {
 // ============================================================================
 // SECTION 5: MAIN APP COMPONENT (App.jsx)
 // ============================================================================
+const LivePriceDisplay = ({ isin, name, onPriceUpdate }) => {
+  const [livePrice, setLivePrice] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  
+  const refreshPrice = async () => {
+    setLoading(true);
+    const symbol = isinToSymbol(isin);
+    
+    if (!symbol) {
+      alert('Symbol mapping not found for this ISIN');
+      setLoading(false);
+      return;
+    }
+    
+    const result = await fetchRealTimePrice(symbol);
+    
+    if (result.success) {
+      setLivePrice(result);
+      setLastUpdate(new Date().toLocaleTimeString());
+      
+      // Call parent callback to update portfolio price
+      if (onPriceUpdate) {
+        onPriceUpdate(result.price);
+      }
+    } else {
+      alert('Failed to fetch price: ' + result.message);
+    }
+    
+    setLoading(false);
+  };
+  
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={refreshPrice}
+        disabled={loading}
+        className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:bg-gray-400"
+      >
+        {loading ? '⟳ Loading...' : '🔄 Live Price'}
+      </button>
+      
+      {livePrice && (
+        <div className="text-sm">
+          <span className="font-bold">${livePrice.price}</span>
+          <span className={`ml-2 ${livePrice.change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            {livePrice.change >= 0 ? '↑' : '↓'} {livePrice.changePercent}
+          </span>
+          <span className="ml-2 text-gray-500">({lastUpdate})</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Title, Tooltip, Legend);
 
